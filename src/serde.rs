@@ -188,6 +188,30 @@ impl<'de> Deserializer<'de> for Value {
         }
     }
 
+    fn deserialize_enum<V>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+      V: Visitor<'de>,
+    {
+        match self {
+            Value::XStr(s) => {
+                // For string values from query params or form data,
+                // create a unit variant enum deserializer
+                visitor.visit_enum(s.into_deserializer())
+            },
+            Value::String(s) => {
+                // For string values from JSON, also handle the same way
+                visitor.visit_enum(s.into_deserializer())
+            },
+            // For other types, use the default implementation
+            _ => self.deserialize_any(visitor),
+        }
+    }
+
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -363,8 +387,101 @@ impl<'de> Deserializer<'de> for Value {
 
     serde::forward_to_deserialize_any! {
         str string bytes byte_buf unit newtype_struct seq tuple
-        tuple_struct map enum unit_struct struct identifier ignored_any
+        tuple_struct map unit_struct struct identifier ignored_any
     }
 }
 
 pub use serde::de::{DeserializeSeed, IntoDeserializer};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        extract::Request,
+        http::{self, HeaderValue},
+    };
+    use axum::extract::FromRequest;
+    use serde::{Deserialize, Serialize};
+    use crate::Params;
+
+    // Define the enum and structs for testing
+    #[derive(Debug, Deserialize, Serialize, PartialEq)]
+    pub enum CurrencyCode {
+        #[serde(rename = "usd")]
+        Usd,
+        #[serde(rename = "gbp")]
+        Gbp,
+        #[serde(rename = "cad")]
+        Cad,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, PartialEq)]
+    pub struct Currency {
+        #[serde(rename = "amount")]
+        pub amount: i32,
+        #[serde(rename = "currency_code")]
+        pub currency_code: CurrencyCode,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, PartialEq)]
+    pub struct Transaction {
+        pub id: String,
+        pub currency: Currency,
+    }
+
+    #[tokio::test]
+    async fn test_deserialize_enum_from_query_params() {
+        let setup_logger = || {
+            let _ = env_logger::builder().is_test(true).try_init();
+        };
+        setup_logger();
+
+        // Test query string parameters
+        let req = Request::builder()
+          .method(http::Method::GET)
+          .uri("/test?currency[amount]=10&currency[currency_code]=usd")
+          .body(Body::empty())
+          .unwrap();
+
+        let result = Params::<Currency>::from_request(req, &()).await;
+        assert!(result.is_ok(), "Failed to parse currency from query params: {:?}", result.err());
+
+        let Params(currency, _) = result.unwrap();
+        assert_eq!(currency.amount, 10);
+        assert_eq!(currency.currency_code, CurrencyCode::Usd);
+    }
+
+    #[tokio::test]
+    async fn test_deserialize_enum_from_form_data() {
+        // Create a wrapper struct that matches the actual form data structure
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct CurrencyWrapper {
+            currency: Currency,
+        }
+
+        let setup_logger = || {
+            let _ = env_logger::builder().is_test(true).try_init();
+        };
+        setup_logger();
+
+        // Test form-urlencoded parameters
+        let form_data = "currency[amount]=20&currency[currency_code]=gbp";
+        let req = Request::builder()
+          .method(http::Method::POST)
+          .header(
+              http::header::CONTENT_TYPE,
+              "application/x-www-form-urlencoded",
+          )
+          .body(Body::from(form_data))
+          .unwrap();
+
+        // Try the full deserialization with the wrapper struct
+        let result = Params::<CurrencyWrapper>::from_request(req, &()).await;
+        assert!(result.is_ok(), "Failed to parse currency wrapper from form data: {:?}", result.err());
+
+        let Params(wrapper, _) = result.unwrap();
+        assert_eq!(wrapper.currency.amount, 20);
+        assert_eq!(wrapper.currency.currency_code, CurrencyCode::Gbp);
+    }
+}
