@@ -212,6 +212,24 @@ impl<'de> Deserializer<'de> for Value {
         }
     }
 
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+      V: Visitor<'de>,
+    {
+        match self {
+            Value::XStr(s) | Value::String(s) => {
+                // For XStr or String types, we can create a string deserializer
+                // that the tuple struct can convert from
+                visitor.visit_newtype_struct(s.into_deserializer())
+            },
+            _ => self.deserialize_any(visitor),
+        }
+    }
+
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -386,7 +404,7 @@ impl<'de> Deserializer<'de> for Value {
     }
 
     serde::forward_to_deserialize_any! {
-        str string bytes byte_buf unit newtype_struct seq tuple
+        str string bytes byte_buf unit seq tuple
         tuple_struct map unit_struct struct identifier ignored_any
     }
 }
