@@ -502,4 +502,43 @@ mod tests {
         assert_eq!(wrapper.currency.amount, 20);
         assert_eq!(wrapper.currency.currency_code, CurrencyCode::Gbp);
     }
+
+    #[tokio::test]
+    async fn test_hex_color_from_form_data() {
+
+        // Define a newtype struct for colors
+        #[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+        pub struct HexColor(pub String);
+
+        // Define a struct that uses HexColor
+        #[derive(Debug, Deserialize, Serialize, PartialEq)]
+        pub struct ColorScheme {
+            pub name: String,
+            pub primary: HexColor,
+            pub secondary: HexColor,
+        }
+
+        let setup_logger = || {
+            let _ = env_logger::builder().is_test(true).try_init();
+        };
+        setup_logger();
+
+        let form_data = "name=Ocean&primary=%230000ff&secondary=%2300ffff";
+        let req = Request::builder()
+          .method(http::Method::POST)
+          .header(
+              http::header::CONTENT_TYPE,
+              "application/x-www-form-urlencoded",
+          )
+          .body(Body::from(form_data))
+          .unwrap();
+
+        let result = Params::<ColorScheme>::from_request(req, &()).await;
+        assert!(result.is_ok(), "Failed to parse color scheme from form data: {:?}", result.err());
+
+        let Params(scheme, _) = result.unwrap();
+        assert_eq!(scheme.name, "Ocean");
+        assert_eq!(scheme.primary.0, "#0000ff");
+        assert_eq!(scheme.secondary.0, "#00ffff");
+    }
 }
